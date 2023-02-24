@@ -43,20 +43,48 @@ plotter :
 #include <math.h>
 
 
-#define DEBUG_SAMPLING_FREQUENCY      1
+//#define DEBUG_SAMPLING_FREQUENCY      1
 #define FFT_USE_WINDOWING             1
-#define FFT_USE_FILTER_HIGH           1
+#define FFT_USE_FILTER_HIGH           0
 #define FFT_USE_FILTER_LOW            0
 #define FTT_USE_FREQ_FACTOR           1
+#define FTT_USE_I2S_STANDBY_OFFSET    1
 #define FFT_LOG_ENABLED               1
-#define FFT_LOOP_ENABLED              0
+#define FFT_LOOP_ENABLED              1
 
 #define FFT_SAMPLE_FREQ_HZ            (4000) /* only : 2000 / 4000 / 8000 / 16000 Hz */
 #define FFT_OUTPUT_SIZE               1024UL
-#define FTT_COUNT                     1 
+#define FTT_COUNT                     2 
+#define I2S_N_U16_BY_CHANNEL          2
 #define I2S_N_CHANNEL                 2
+#define FFT_CYCLE                     (FTT_COUNT + (FTT_COUNT % 2))
+
+#if (FTT_USE_I2S_STANDBY_OFFSET == 1)
+  /*
+    Compute :
+      Use #define FFT_I2S_COMPUTE_STANDBY_OFFSET 1 for offset computation 
+  */
+
+  #if (FFT_SAMPLE_FREQ_HZ == 2000)
+    #define FFT_I2S_STANDBY_OFFSET      (0) /* For sampling 2000Hz, res 1.91Hz */
+  #elif (FFT_SAMPLE_FREQ_HZ == 4000)
+    #define FFT_I2S_STANDBY_OFFSET      (4096)//(136) /* For sampling 4000Hz, res 3.79Hz */
+  #elif  (FFT_SAMPLE_FREQ_HZ == 8000)
+    #define FFT_I2S_STANDBY_OFFSET      (0) /* For sampling 8000Hz, res 7.6Hz */
+  #elif  (FFT_SAMPLE_FREQ_HZ == 16000)
+    #define FFT_I2S_STANDBY_OFFSET      (0) /* For sampling 16000Hz, res 15.20Hz */      
+  #else
+    //try sample 4100Hz for beep with ratio 1.95
+    #define FFT_I2S_STANDBY_OFFSET      (0) /* For sampling 16000Hz */      
+  #endif
+
+  #define FFT_I2S_STANDBY_OFFSET_SIZE   (FFT_I2S_STANDBY_OFFSET * I2S_N_U16_BY_CHANNEL * I2S_N_CHANNEL)
+#else
+  #define FFT_I2S_STANDBY_OFFSET_SIZE   (0)
+#endif 
+
 #define FFT_I2S_SAMPLING_SIZE         (FFT_OUTPUT_SIZE * 2)
-#define FFT_I2S_BUFFER_SIZE           (FFT_OUTPUT_SIZE * (FTT_COUNT + (FTT_COUNT % 2))) * I2S_N_CHANNEL
+#define FFT_I2S_BUFFER_SIZE           (((FFT_OUTPUT_SIZE * I2S_N_U16_BY_CHANNEL * I2S_N_CHANNEL) + FFT_I2S_STANDBY_OFFSET_SIZE) * FFT_CYCLE)
 #define FFT_COMPLEX_INPUT             (FFT_OUTPUT_SIZE * 2UL)
 
 #if (FTT_USE_FREQ_FACTOR == 1)
@@ -80,10 +108,15 @@ plotter :
     Finish by compute average of each ratio (FFT_SAMPLE_FREQ_FACTOR = average of each ratio)
   */
   #define FFT_SAMPLE_FREQ_FACTOR      (1.0)
-#endif  
+#endif 
+
 #define FFT_SAMPLE_RES_HZ             ((float32_t)(((float32_t)FFT_SAMPLE_FREQ_HZ / (float32_t)FFT_COMPLEX_INPUT) * (float32_t)FFT_SAMPLE_FREQ_FACTOR))
-#define FFT_HIGH_CUTT_OFF_FREQ        40 //50 /* Hz */
+#define FFT_HIGH_CUTT_OFF_FREQ        50 /* Hz */
 #define FFT_LOW_CUTT_OFF_FREQ         50 /* Hz */
+
+#ifndef M_PI
+  #define M_PI       3.14159265358979323846
+#endif
 
 I2S_HandleTypeDef hi2s2;
 DMA_HandleTypeDef hdma_spi2_rx;
@@ -91,7 +124,7 @@ DMA_HandleTypeDef hdma_spi2_rx;
 UART_HandleTypeDef huart2;
 DMA_HandleTypeDef hdma_usart2_tx;
 
-int16_t i2sData[FFT_I2S_BUFFER_SIZE];
+uint16_t i2sData[FFT_I2S_BUFFER_SIZE];
 
 static uint8_t i2sDataCount = 0;
 static uint8_t fftPerformed = 0;
@@ -100,7 +133,6 @@ static bool fftStarted = FALSE;
 arm_rfft_fast_instance_f32 S;
 
 static float m_fft_output_f32[FFT_OUTPUT_SIZE];             //!< FFT output data. Frequency domain.
-//static float m_fft_input_f32[FFT_COMPLEX_INPUT] = {0};     //!< FFT input array for complex numbers. Time domain.
 
 FFT_RESULTS fftResult[FTT_COUNT];
 
@@ -113,9 +145,17 @@ static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_I2S2_Init(void);
 static void MX_USART2_UART_Init(void);
-/* USER CODE BEGIN PFP */
 
-/* USER CODE END PFP */
+static void print_dataShort(const char* sz_title, const uint16_t *p_data, uint16_t size);
+static void print_dataInteger(const char* sz_title, const uint32_t *p_data, uint16_t size);
+static void print_dataU16Hex(const char* sz_title, const uint16_t *p_data, uint16_t size);
+static void print_dataU32Hex(const char* sz_title, const uint32_t *p_data, uint16_t size);
+static void print_dataFloat(const char* sz_title, const float32_t *p_data, uint16_t size);
+static void print_plotter(float const * p_data, uint16_t size);
+static void print_fft_min(float * m_fft_output_f32, uint16_t data_size);
+static void print_fft_max(float * m_fft_output_f32, uint16_t data_size);
+static void print_fft_result(FFT_RESULTS *p_fftResult);
+static void fft_create_result(FFT_RESULTS *p_fftResult, float *p_fftValue, uint16_t binOutputCount, uint16_t binOffset, uint16_t binOutputSize, uint16_t fftSize);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
@@ -297,19 +337,35 @@ bool processDSP(void) {
   uint16_t i2sIndex = fftPerformed * FFT_OUTPUT_SIZE * I2S_N_CHANNEL;
   float32_t f32_fftSamples[FFT_OUTPUT_SIZE];
   float32_t dcComponent = 0.0;
-  uint32_t i, y;
+  uint32_t i;
+  uint16_t *p_i2sData = NULL;
 
   if(!fftStarted || (fftPerformed > FTT_COUNT))
     return FALSE;
 
+  p_i2sData = (FFT_I2S_STANDBY_OFFSET_SIZE) ? &i2sData[i2sIndex + FFT_I2S_STANDBY_OFFSET_SIZE] : &i2sData[i2sIndex];
+
 #if (FFT_LOG_ENABLED == 1)
   TRACE("New fft %d: index %d\r\n", fftPerformed, i2sIndex);  
-  //print_dataInteger("I2S samples", (uint32_t*) &i2sData[i2sIndex], FFT_I2S_BUFFER_SIZE / 2);
+  //print_dataInteger("I2S samples", (uint32_t*)p_i2sData, FFT_I2S_BUFFER_SIZE / 2);
+  //print_dataShort("I2S samples", (uint16_t*) p_i2sData, FFT_I2S_BUFFER_SIZE / 2);
+  //print_dataU16Hex("I2S samples", p_i2sData, FFT_I2S_BUFFER_SIZE / 2);
 #endif
 
 	/* extract 16bits from 24 bits left i2s mono sample and compute DC component */
 	for(i = 0; i < (FFT_OUTPUT_SIZE); i++ ) { 
-    f32_fftSamples[i] = (float32_t) i2sData[(i * I2S_N_CHANNEL) + i2sIndex];
+    //uint16_t part_1_left = i2sData[((i * sizeof(uint32_t)) + i2sIndex)];
+    //uint16_t part_2_left = i2sData[((i * sizeof(uint32_t)) + i2sIndex) + 1];
+    uint32_t part_left = (p_i2sData[i * sizeof(uint32_t)] << 16) | p_i2sData[(i * sizeof(uint32_t)) + 1];
+    int32_t part_left_signed = (int32_t) part_left >> 8; 
+
+    //uint16_t part_1_right = i2sData[((i * sizeof(uint32_t)) + i2sIndex) + 2];
+    //uint16_t part_2_right = i2sData[((i * sizeof(uint32_t)) + i2sIndex) + 3];
+    //uint32_t part_right = (i2sData[((i * sizeof(uint32_t)) + i2sIndex) + 2] << 16) | i2sData[((i * sizeof(uint32_t)) + i2sIndex) + 3];
+
+    f32_fftSamples[i] = (float32_t) part_left_signed;
+
+    //TRACE("%d: %08x %08x %d\r\n", i, part_left, part_left_signed, part_left_signed);
 
     dcComponent += f32_fftSamples[i];
   }
@@ -323,8 +379,20 @@ bool processDSP(void) {
   for(i=0;i<FFT_OUTPUT_SIZE;i++)
     f32_fftSamples[i] -= dcComponent;
 
+#if (FFT_I2S_COMPUTE_STANDBY_OFFSET == 1)
+  for(i=0;i<FFT_OUTPUT_SIZE;i++) {
+    if(f32_fftSamples[i] >= -100000.0)
+      continue;
+    
+    break;
+  }
+
+  TRACE("offset exit standby %d [index %d]\r\n", (i == FFT_OUTPUT_SIZE) ? 0 : i, i);
+#endif
+
 #if (FFT_LOG_ENABLED == 1)
   //print_dataFloat("I2S samples without dc component", f32_fftSamples, FFT_OUTPUT_SIZE);
+  //print_plotter(f32_fftSamples, FFT_OUTPUT_SIZE);
 #endif
 
 #if (FFT_USE_WINDOWING == 1) 
@@ -378,7 +446,6 @@ bool processDSP(void) {
   print_fft_max(m_fft_output_f32, FFT_OUTPUT_SIZE / 2); // N/2 (nyquist-theorm)
 #endif
 
-/*
   float32_t min_value = 0;
   uint32_t  min_val_index = 0;
 
@@ -387,7 +454,6 @@ bool processDSP(void) {
   for(uint32_t i=0;i<FFT_OUTPUT_SIZE / 2;i++) { 
     m_fft_output_f32[i] -= min_value;
   }
-*/
 
   /* Remove first bin correspond to the DC component */
   m_fft_output_f32[0] = 0.0; 
@@ -431,6 +497,32 @@ void print_dataInteger(const char* sz_title, const uint32_t *p_data, uint16_t si
 			TRACE("[ %d ]", p_data[i]);
 		else
 			TRACE("[ %d ]\r\n", p_data[i]);
+	}	
+}
+
+void print_dataU16Hex(const char* sz_title, const uint16_t *p_data, uint16_t size) {
+  uint16_t i;
+
+  TRACE("%s :\r\n", sz_title);
+  
+  for (i = 0; i<size; i++) {
+		if(i < (size - 1))
+			TRACE("[ %04x ]", p_data[i]);
+		else
+			TRACE("[ %04x ]\r\n", p_data[i]);
+	}	
+}
+
+void print_dataU32Hex(const char* sz_title, const uint32_t *p_data, uint16_t size) {
+  uint16_t i;
+
+  TRACE("%s :\r\n", sz_title);
+  
+  for (i = 0; i<size; i++) {
+		if(i < (size - 1))
+			TRACE("[ %08x ]", p_data[i]);
+		else
+			TRACE("[ %08x ]\r\n", p_data[i]);
 	}	
 }
 
@@ -552,7 +644,7 @@ int main(void)
   HAL_I2S_DMAStop(&hi2s2);
   HAL_Delay(500);
 	
-  HAL_I2S_Receive_DMA(&hi2s2, (uint16_t *) i2sData, FFT_I2S_BUFFER_SIZE * 2);
+  HAL_I2S_Receive_DMA(&hi2s2, (uint16_t *) i2sData, FFT_I2S_BUFFER_SIZE / 2);
 
   arm_rfft_fast_init_f32(&S, FFT_OUTPUT_SIZE);
 
@@ -562,10 +654,14 @@ int main(void)
 
 #if (FFT_LOOP_ENABLED == 1)
     if(fftPerformed >= FTT_COUNT) {
+      __disable_irq(); 
       i2sDataCount = 0;
-      fftPerformed = 0;
       fftStarted = FALSE; 
-      HAL_I2S_Receive_DMA(&hi2s2, (uint16_t *) i2sData, FFT_I2S_BUFFER_SIZE * 2);
+      __enable_irq();
+    
+      fftPerformed = 0;
+
+      HAL_I2S_Receive_DMA(&hi2s2, (uint16_t *) i2sData, FFT_I2S_BUFFER_SIZE / 2);
     }
 #endif
   }
@@ -626,10 +722,10 @@ static void MX_I2S2_Init(void)
   hi2s2.Instance = SPI2;
   hi2s2.Init.Mode = I2S_MODE_MASTER_RX;
   hi2s2.Init.Standard = I2S_STANDARD_PHILIPS;
-  hi2s2.Init.DataFormat = I2S_DATAFORMAT_16B_EXTENDED; //16 bits instead of 24bits !!!
+  hi2s2.Init.DataFormat = I2S_DATAFORMAT_24B; 
   hi2s2.Init.MCLKOutput = I2S_MCLKOUTPUT_DISABLE;
   hi2s2.Init.AudioFreq = 4000U; //I2S_AUDIOFREQ_8K; //I2S_AUDIOFREQ_32K;
-  hi2s2.Init.CPOL = I2S_CPOL_HIGH; //LOW;
+  hi2s2.Init.CPOL = I2S_CPOL_LOW; 
   hi2s2.Init.ClockSource = I2S_CLOCK_PLL;
   hi2s2.Init.FullDuplexMode = I2S_FULLDUPLEXMODE_DISABLE;
   if (HAL_I2S_Init(&hi2s2) != HAL_OK)
@@ -657,7 +753,7 @@ static void MX_DMA_Init(void)
 
 static void MX_GPIO_Init(void)
 {
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  //GPIO_InitTypeDef GPIO_InitStruct = {0};
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOE_CLK_ENABLE();
