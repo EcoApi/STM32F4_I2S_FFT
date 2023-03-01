@@ -45,16 +45,16 @@ plotter :
 
 //#define DEBUG_SAMPLING_FREQUENCY      1
 #define FFT_USE_WINDOWING             1
-#define FFT_USE_FILTER_HIGH           0
+#define FFT_USE_FILTER_HIGH           1
 #define FFT_USE_FILTER_LOW            0
 #define FTT_USE_FREQ_FACTOR           1
-#define FTT_USE_I2S_STANDBY_OFFSET    1
+#define FTT_USE_I2S_STANDBY_OFFSET    0
 #define FFT_LOG_ENABLED               1
 #define FFT_LOOP_ENABLED              1
 
 #define FFT_SAMPLE_FREQ_HZ            (4000) /* only : 2000 / 4000 / 8000 / 16000 Hz */
 #define FFT_OUTPUT_SIZE               1024UL
-#define FTT_COUNT                     2 
+#define FTT_COUNT                     1 
 #define I2S_N_U16_BY_CHANNEL          2
 #define I2S_N_CHANNEL                 2
 #define FFT_CYCLE                     (FTT_COUNT + (FTT_COUNT % 2))
@@ -111,15 +111,15 @@ plotter :
 #endif 
 
 #define FFT_SAMPLE_RES_HZ             ((float32_t)(((float32_t)FFT_SAMPLE_FREQ_HZ / (float32_t)FFT_COMPLEX_INPUT) * (float32_t)FFT_SAMPLE_FREQ_FACTOR))
-#define FFT_HIGH_CUTT_OFF_FREQ        50 /* Hz */
+#define FFT_HIGH_CUTT_OFF_FREQ        30 /* Hz */
 #define FFT_LOW_CUTT_OFF_FREQ         50 /* Hz */
 
 #ifndef M_PI
   #define M_PI       3.14159265358979323846
 #endif
 
-I2S_HandleTypeDef hi2s2;
-DMA_HandleTypeDef hdma_spi2_rx;
+I2S_HandleTypeDef hi2s4;
+DMA_HandleTypeDef hdma_spi4_rx;
 
 UART_HandleTypeDef huart2;
 DMA_HandleTypeDef hdma_usart2_tx;
@@ -143,7 +143,7 @@ size_t sz_traceBufferSize;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
-static void MX_I2S2_Init(void);
+static void MX_I2S4_Init(void);
 static void MX_USART2_UART_Init(void);
 
 static void print_dataShort(const char* sz_title, const uint16_t *p_data, uint16_t size);
@@ -317,7 +317,7 @@ windowing (int n, const float32_t *data, int flag_window, float32_t scale, float
 /* all 2048 bytes */
 void HAL_I2S_RxHalfCpltCallback(I2S_HandleTypeDef *hi2s) {
   if(++i2sDataCount >= FTT_COUNT)
-    HAL_I2S_DMAStop(&hi2s2);
+    HAL_I2S_DMAStop(&hi2s4);
   
   if(!fftStarted)
     fftStarted = TRUE;  
@@ -327,7 +327,7 @@ void HAL_I2S_RxHalfCpltCallback(I2S_HandleTypeDef *hi2s) {
 void HAL_I2S_RxCpltCallback(I2S_HandleTypeDef *hi2s) {
   i2sDataCount++;
 
-  HAL_I2S_DMAStop(&hi2s2);
+  HAL_I2S_DMAStop(&hi2s4);
 
   if(!fftStarted) 
     fftStarted = TRUE;  
@@ -638,13 +638,13 @@ int main(void)
 
   MX_GPIO_Init();
   MX_DMA_Init();
-  MX_I2S2_Init();
+  MX_I2S4_Init();
   MX_USART2_UART_Init();
 
-  HAL_I2S_DMAStop(&hi2s2);
+  HAL_I2S_DMAStop(&hi2s4);
   HAL_Delay(500);
 	
-  HAL_I2S_Receive_DMA(&hi2s2, (uint16_t *) i2sData, FFT_I2S_BUFFER_SIZE / 2);
+  HAL_I2S_Receive_DMA(&hi2s4, (uint16_t *) i2sData, FFT_I2S_BUFFER_SIZE / 2);
 
   arm_rfft_fast_init_f32(&S, FFT_OUTPUT_SIZE);
 
@@ -661,37 +661,35 @@ int main(void)
     
       fftPerformed = 0;
 
-      HAL_I2S_Receive_DMA(&hi2s2, (uint16_t *) i2sData, FFT_I2S_BUFFER_SIZE / 2);
+      HAL_I2S_Receive_DMA(&hi2s4, (uint16_t *) i2sData, FFT_I2S_BUFFER_SIZE / 2);
     }
 #endif
   }
 }
 
-void SystemClock_Config(void) {
+void SystemClock_Config(void)
+{
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
-
-  /** Macro to configure the PLL multiplication factor
-  */
-  __HAL_RCC_PLL_PLLM_CONFIG(16);
-
-  /** Macro to configure the PLL clock source
-  */
-  __HAL_RCC_PLL_PLLSOURCE_CONFIG(RCC_PLLSOURCE_HSI);
 
   /** Configure the main internal regulator output voltage
   */
   __HAL_RCC_PWR_CLK_ENABLE();
-  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE3 /*PWR_REGULATOR_VOLTAGE_SCALE1*/);
 
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLM = 15;
+  RCC_OscInitStruct.PLL.PLLN = 144;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+  RCC_OscInitStruct.PLL.PLLQ = 5;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -717,21 +715,24 @@ void SystemClock_Config(void) {
   * @param None
   * @retval None
   */
-static void MX_I2S2_Init(void)
+static void MX_I2S4_Init(void)
 {
-  hi2s2.Instance = SPI2;
-  hi2s2.Init.Mode = I2S_MODE_MASTER_RX;
-  hi2s2.Init.Standard = I2S_STANDARD_PHILIPS;
-  hi2s2.Init.DataFormat = I2S_DATAFORMAT_24B; 
-  hi2s2.Init.MCLKOutput = I2S_MCLKOUTPUT_DISABLE;
-  hi2s2.Init.AudioFreq = 4000U; //I2S_AUDIOFREQ_8K; //I2S_AUDIOFREQ_32K;
-  hi2s2.Init.CPOL = I2S_CPOL_LOW; 
-  hi2s2.Init.ClockSource = I2S_CLOCK_PLL;
-  hi2s2.Init.FullDuplexMode = I2S_FULLDUPLEXMODE_DISABLE;
-  if (HAL_I2S_Init(&hi2s2) != HAL_OK)
+  hi2s4.Instance = SPI4;
+  hi2s4.Init.Mode = I2S_MODE_MASTER_RX;
+  hi2s4.Init.Standard = I2S_STANDARD_PHILIPS;
+  hi2s4.Init.DataFormat = I2S_DATAFORMAT_24B;
+  hi2s4.Init.MCLKOutput = I2S_MCLKOUTPUT_DISABLE;
+  hi2s4.Init.AudioFreq = 4000U; //I2S_AUDIOFREQ_8K;
+  hi2s4.Init.CPOL = I2S_CPOL_LOW;
+  hi2s4.Init.ClockSource = I2S_CLOCK_PLL;
+  hi2s4.Init.FullDuplexMode = I2S_FULLDUPLEXMODE_DISABLE;
+  if (HAL_I2S_Init(&hi2s4) != HAL_OK)
   {
     Error_Handler();
   }
+  /* USER CODE BEGIN I2S4_Init 2 */
+
+  /* USER CODE END I2S4_Init 2 */
 }
 
 static void MX_DMA_Init(void)
@@ -739,11 +740,12 @@ static void MX_DMA_Init(void)
 
   /* DMA controller clock enable */
   __HAL_RCC_DMA1_CLK_ENABLE();
+  __HAL_RCC_DMA2_CLK_ENABLE();
 
   /* DMA interrupt init */
-  /* DMA1_Stream3_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Stream3_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Stream3_IRQn);
+  /* DMA2_Stream0_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Stream0_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Stream0_IRQn);
   
   /* DMA1_Stream6_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Stream6_IRQn, 0, 0);
